@@ -1,0 +1,1 @@
+# ShellPilotAI-Terminal-monitor-terminate-ai-nlp
