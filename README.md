@@ -2,6 +2,9 @@
 
 Windows terminal session manager with AI-enhanced command conversion, idle timeout termination, and comprehensive process monitoring with separate PID reporting.
 
+<img width="1248" height="539" alt="{33EF8DDC-39FF-4378-87E8-E677B8142C25}" src="https://github.com/user-attachments/assets/e57d1ed1-b843-4c6d-a130-4b60165fc316" />
+
+
 ## Core Components
 
 **main.py**: Tkinter GUI with resource dashboard, process library, and separate PID report generation  
@@ -89,4 +92,5 @@ python main.py
 **Process Termination**: Graceful → Force kill (5s timeout)  
 **File Operations**: Automatic cleanup on session end  
 **AI Failures**: Fallback to manual command entry  
+
 **Permission Issues**: Execution policy bypass options
