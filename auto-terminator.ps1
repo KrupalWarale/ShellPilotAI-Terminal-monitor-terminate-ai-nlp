@@ -34,6 +34,7 @@ $script:HF_TOKEN = $null
 
 # Child process monitoring
 $script:CHILD_PROCESSES = @{}
+$script:MONITORED_CHILDREN_FILE = Join-Path $env:TEMP "auto_terminator_monitored_children.txt"
 
 # =============================================================================
 # UTILITY FUNCTIONS
@@ -127,7 +128,6 @@ function Show-Status {
     }
     
     Write-Host "Main timeout threshold: $($script:IDLE_TIMEOUT)s"
-    Write-Host "Child process timeout: $($script:CHILD_TIMEOUT)s"
     Write-Host "Session PID: $PID"
     Write-Host "PowerShell Version: $($PSVersionTable.PSVersion)"
     Write-Host "Auto-execute AI commands: $(if ($script:AUTO_EXECUTE) { 'Enabled' } else { 'Disabled' })"
@@ -173,7 +173,7 @@ function Convert-ToCommand {
     }
     
     try {
-        # Use the existing model.py for AI conversion
+        # Use the dedicated AI converter
         $prompt = "Convert this natural language request to a Windows command line command. Only return the command, nothing else. Request: $NaturalText"
         
         # Call the dedicated AI converter
@@ -200,7 +200,7 @@ function Convert-ToCommand {
         return Get-FallbackCommand $NaturalText
     }
     catch {
-        Write-Log "Python model failed: $($_.Exception.Message)"
+        Write-Log "Python AI converter failed: $($_.Exception.Message)"
         # Fallback: Simple pattern matching for common commands
         return Get-FallbackCommand $NaturalText
     }
@@ -264,6 +264,25 @@ function Start-ChildProcessMonitoring {
     # This function would be called when child processes are launched
     # For now, we'll monitor child processes in the main loop
     Write-Log "Child process monitoring started (automatic termination removed)"
+    
+    # Create or clear the monitored children file
+    try {
+        "" | Out-File -FilePath $script:MONITORED_CHILDREN_FILE -Encoding ASCII -Force
+    } catch {
+        Write-Log "Warning: Could not create monitored children file: $($_.Exception.Message)"
+    }
+}
+
+function Notify-MonitoredChild {
+    param([int]$ChildPid)
+    
+    # Notify the Python monitor about this child process
+    try {
+        "$ChildPid" | Out-File -FilePath $script:MONITORED_CHILDREN_FILE -Append -Encoding ASCII
+        Write-Log "Notified Python monitor about child process: $ChildPid"
+    } catch {
+        Write-Log ("Warning: Could not notify Python monitor about child process {0}: {1}" -f $ChildPid, $_.Exception.Message)
+    }
 }
 
 function Check-ChildProcesses {
@@ -272,6 +291,8 @@ function Check-ChildProcesses {
     
     # Track current child PIDs
     $currentChildPids = @()
+    
+    $terminatedPids = @()
     
     foreach ($child in $currentChildren) {
         $childPid = $child.ProcessId
@@ -287,6 +308,9 @@ function Check-ChildProcesses {
                 LastCPU = 0
                 LastMemory = 0
             }
+            
+            # Notify Python monitor about this new child process
+            Notify-MonitoredChild $childPid
         } else {
             # Check if existing child process is active
             try {
@@ -306,16 +330,20 @@ function Check-ChildProcesses {
                 # 1. Has CPU activity
                 # 2. Has memory activity
                 # 3. Currently consuming CPU (> 0)
-                # 4. Is less than child timeout old
-                if ($hasCPUActivity -or $hasMemoryActivity -or $cpuUsage -gt 0 -or ([double]::Parse((Get-Date -UFormat %s)) - $script:CHILD_PROCESSES[$childPid].StartTime) -lt $script:CHILD_TIMEOUT) {
+                if ($hasCPUActivity -or $hasMemoryActivity -or $cpuUsage -gt 0) {
                     $script:CHILD_PROCESSES[$childPid].LastActive = [double]::Parse((Get-Date -UFormat %s))
                 }
             } catch {
-                # Process may have terminated, remove from tracking
+                # Process may have terminated, collect for removal
                 Write-Log "Child process terminated: $($script:CHILD_PROCESSES[$childPid].Name) (PID: $childPid)"
-                $script:CHILD_PROCESSES.Remove($childPid)
+                $terminatedPids += $childPid
             }
         }
+    }
+    
+    # Remove terminated processes
+    foreach ($terminatedPid in $terminatedPids) {
+        $script:CHILD_PROCESSES.Remove($terminatedPid)
     }
     
     # Remove tracking for processes that no longer exist
@@ -326,6 +354,7 @@ function Check-ChildProcesses {
         }
     }
     
+    # Now safely remove the PIDs
     foreach ($pidToRemove in $pidsToRemove) {
         Write-Log "Stopped monitoring child process: $($script:CHILD_PROCESSES[$pidToRemove].Name) (PID: $pidToRemove)"
         $script:CHILD_PROCESSES.Remove($pidToRemove)
@@ -534,7 +563,7 @@ function Start-AutoTerminator {
     Write-Host ""
     
     Write-Log "Auto-terminator session started (PID: $PID)"
-    Write-Log "Main timeout: $($script:IDLE_TIMEOUT)s, Child process timeout: $($script:CHILD_TIMEOUT)s"
+    Write-Log "Main timeout: $($script:IDLE_TIMEOUT)s"
     
     # Record initial timestamp
     Record-CommandTime
@@ -607,6 +636,20 @@ function Start-AutoTerminator {
                 }
             }
             
+            # If we have an input buffer but no prompt shown, we need to show the prompt
+            if (-not [string]::IsNullOrEmpty($inputBuffer) -and -not $promptShown) {
+                try {
+                    $currentPath = (Get-Location).Path -replace [regex]::Escape($env:USERPROFILE), "~"
+                    Write-Host "auto-term:" -ForegroundColor Green -NoNewline
+                    Write-Host $currentPath -ForegroundColor Blue -NoNewline
+                    Write-Host "PS> " -NoNewline
+                    # Don't set $promptShown = $true here because we want to be able to show it again
+                    # This fixes the issue where the prompt disappears after backspace
+                } catch {
+                    Write-Host "auto-term> " -NoNewline
+                }
+            }
+            
             # Check for keyboard input
             $keyPressed = Read-KeyIfAvailable
             
@@ -614,7 +657,6 @@ function Start-AutoTerminator {
                 # Reset timer and counters on any key press
                 Record-CommandTime
                 $lastCountdownSecond = -1
-                $promptShown = $false
                 
                 # Handle special keys
                 if ([int]$keyPressed -eq 13) {  # Enter key
@@ -623,14 +665,15 @@ function Start-AutoTerminator {
                     if (-not [string]::IsNullOrWhiteSpace($inputBuffer)) {
                         Write-Log "User entered command: $inputBuffer"
                         Execute-Command $inputBuffer
-                        $inputBuffer = ""
                     }
+                    $inputBuffer = ""
                     $promptShown = $false  # Reset prompt for next command
                 } elseif ([int]$keyPressed -eq 8) {  # Backspace
                     if ($inputBuffer.Length -gt 0) {
                         $inputBuffer = $inputBuffer.Substring(0, $inputBuffer.Length - 1)
                         Write-Host "`b `b" -NoNewline  # Erase character
                     }
+                    # Don't reset $promptShown for backspace, keep the prompt visible
                 } elseif ([int]$keyPressed -eq 3) {  # Ctrl+C
                     Write-Host "^C"
                     $inputBuffer = ""
@@ -641,9 +684,11 @@ function Start-AutoTerminator {
                         Write-Host "`b `b" -NoNewline
                     }
                     $inputBuffer = ""
+                    $promptShown = $false
                 } elseif ([int]$keyPressed -ge 32 -and [int]$keyPressed -le 126) {  # Printable ASCII characters only
                     $inputBuffer += $keyPressed
                     Write-Host $keyPressed -NoNewline
+                    # Don't reset $promptShown for typing, keep the prompt visible
                 }
                 # Ignore arrow keys and other special keys (they cause issues)
             }
@@ -656,6 +701,7 @@ function Start-AutoTerminator {
         # Cleanup
         Write-Log "Auto-terminator session ended (PID: $PID)"
         Remove-Item $script:TIMESTAMP_FILE -Force -ErrorAction SilentlyContinue
+        Remove-Item $script:MONITORED_CHILDREN_FILE -Force -ErrorAction SilentlyContinue
         Write-ColoredText "`nAuto-terminator session ended" Red
     }
 }
@@ -717,7 +763,6 @@ if ($Help) {
     Write-Host "  .\auto-terminator.ps1 -Install           - Install to user profile"
     Write-Host "  .\auto-terminator.ps1 -Help              - Show this help"
     Write-Host "  .\auto-terminator.ps1 -Timeout 10        - Set custom timeout (seconds)"
-    Write-Host "  .\auto-terminator.ps1 -ChildTimeout 15   - Set child process timeout (seconds)"
     Write-Host "  .\auto-terminator.ps1 -AutoExecute       - Enable auto-execution of AI commands"
     Write-Host ""
     Write-Host "Features:"
@@ -741,7 +786,7 @@ try {
         exit 1
     }
 } catch {
-    Write-Log "Error checking execution policy: $_"
+    Write-Log "Error checking execution policy: $($_.Exception.Message)"
 }
 
 # Default: start the auto-terminator

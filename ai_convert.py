@@ -2,14 +2,12 @@
 import os
 import sys
 from huggingface_hub import InferenceClient
-from dotenv import load_dotenv, find_dotenv
+from dotenv import load_dotenv
 
-# Load .env if present
-load_dotenv(find_dotenv())
+load_dotenv()
 
 MODEL = "meta-llama/Llama-3.1-8B-Instruct"
 
-# Accept either HF_TOKEN or HUGGINGFACEHUB_API_TOKEN
 token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACEHUB_API_TOKEN")
 if not token:
     sys.exit("Set HF_TOKEN or HUGGINGFACEHUB_API_TOKEN")
@@ -63,15 +61,7 @@ Output:"""
         result = resp.choices[0].message.content.strip()
         
         # Clean up the response - extract just the command
-        lines = result.split('\n')
-        for line in lines:
-            line = line.strip()
-            # Skip empty lines and lines that look like labels
-            if line and not line.startswith('Input:') and not line.startswith('Output:') and not line.startswith('Examples:'):
-                return line
-        
-        # If we get here, return the first non-empty line
-        return result.split('\n')[0].strip() if result else "Error: No response from AI"
+        return result.strip() if result else "Error: No response from AI"
         
     except Exception as e:
         return f"Error: {str(e)}"

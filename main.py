@@ -6,12 +6,15 @@ import threading
 import time
 import psutil
 from datetime import datetime
+import sys
+
+import inactive_process_monitor
 
 class AutoTerminatorManager:
     def __init__(self, master):
         self.master = master
         master.title("🚀 Auto-Terminator Dashboard")
-        master.geometry("900x700")
+        master.geometry("1000x800")
         master.configure(bg='#2b2b2b')
         
         # Configure style
@@ -24,8 +27,12 @@ class AutoTerminatorManager:
         # Auto-execution flag
         self.auto_execute_ai = tk.BooleanVar(value=False)
         
-        # Process monitoring termination delay (in seconds)
-        self.process_termination_delay = tk.IntVar(value=30)
+
+        
+        # Inactive process monitoring
+        self.inactive_process_monitor = None
+        self.inactive_monitor_enabled = tk.BooleanVar(value=False)
+        self.inactive_timeout_var = tk.IntVar(value=30)
         
         # Process monitoring process
         self.process_monitor_process = None
@@ -33,6 +40,10 @@ class AutoTerminatorManager:
         # Process library to track all PIDs
         self.process_library = {}
         self.current_session_start_time = None
+        
+        # Active/Inactive processes tracking
+        self.active_processes = {}
+        self.inactive_processes = {}
 
         self.create_widgets()
         self.update_log_thread = None
@@ -52,8 +63,7 @@ class AutoTerminatorManager:
             'danger': '#f44336',
             'warning': '#ff9800',
             'info': '#2196F3',
-            'card_bg': '#3c3c3c',
-            'border': '#555555'
+            'card_bg': '#3c3c3c'
         }
         
         # Configure ttk styles
@@ -120,6 +130,38 @@ class AutoTerminatorManager:
         self.timeout_entry.pack(side=tk.LEFT, padx=(10, 5))
         
         tk.Label(timeout_frame, text="seconds", bg=self.colors['card_bg'], 
+                fg=self.colors['fg'], font=('Segoe UI', 10)).pack(side=tk.LEFT)
+        
+        # Inactive process monitoring settings
+        inactive_frame = tk.Frame(control_frame, bg=self.colors['card_bg'])
+        inactive_frame.pack(fill=tk.X, pady=(10, 10))
+        
+        # Inactive monitoring checkbox
+        self.inactive_monitor_checkbox = tk.Checkbutton(
+            inactive_frame,
+            text="Monitor inactive processes",
+            variable=self.inactive_monitor_enabled,
+            bg=self.colors['card_bg'],
+            fg=self.colors['fg'],
+            selectcolor=self.colors['card_bg'],
+            activebackground=self.colors['card_bg'],
+            activeforeground=self.colors['fg'],
+            font=('Segoe UI', 10),
+            highlightthickness=0
+        )
+        self.inactive_monitor_checkbox.pack(side=tk.LEFT)
+        
+        # Inactive timeout setting
+        tk.Label(inactive_frame, text="Timeout:", bg=self.colors['card_bg'], 
+                fg=self.colors['fg'], font=('Segoe UI', 10)).pack(side=tk.LEFT, padx=(10, 5))
+        
+        self.inactive_timeout_entry = tk.Entry(inactive_frame, font=('Segoe UI', 10), width=8,
+                                              bg='#4a4a4a', fg='white', insertbackground='white',
+                                              relief='flat', bd=5)
+        self.inactive_timeout_entry.insert(0, "30")
+        self.inactive_timeout_entry.pack(side=tk.LEFT, padx=(0, 5))
+        
+        tk.Label(inactive_frame, text="seconds", bg=self.colors['card_bg'], 
                 fg=self.colors['fg'], font=('Segoe UI', 10)).pack(side=tk.LEFT)
         
         # Auto-execution checkbox
@@ -216,6 +258,49 @@ class AutoTerminatorManager:
                                     font=('Segoe UI', 14, 'bold'))
         self.battery_label.pack(pady=(0, 8))
 
+        # Active/Inactive Processes Section
+        processes_frame = ttk.Frame(main_frame, style='Card.TFrame', padding=15)
+        processes_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        processes_title = tk.Label(processes_frame, text="📋 Active/Inactive Processes", 
+                                 bg=self.colors['card_bg'], fg=self.colors['fg'],
+                                 font=('Segoe UI', 12, 'bold'))
+        processes_title.pack(anchor=tk.W, pady=(0, 10))
+        
+        # Create a frame for the process lists
+        process_lists_frame = tk.Frame(processes_frame, bg=self.colors['card_bg'])
+        process_lists_frame.pack(fill=tk.X)
+        
+        # Active processes
+        active_frame = tk.Frame(process_lists_frame, bg=self.colors['card_bg'])
+        active_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        
+        tk.Label(active_frame, text="🟢 Active Processes", bg=self.colors['card_bg'], 
+                fg=self.colors['accent'], font=('Segoe UI', 10, 'bold')).pack(anchor=tk.W)
+        
+        self.active_processes_text = scrolledtext.ScrolledText(active_frame, width=40, height=8,
+                                                              state=tk.DISABLED,
+                                                              bg='#1e1e1e', fg='#00ff00',
+                                                              font=('Consolas', 9),
+                                                              relief='flat', bd=0,
+                                                              insertbackground='#00ff00')
+        self.active_processes_text.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
+        
+        # Inactive processes
+        inactive_frame = tk.Frame(process_lists_frame, bg=self.colors['card_bg'])
+        inactive_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(5, 0))
+        
+        tk.Label(inactive_frame, text="🔴 Inactive Processes", bg=self.colors['card_bg'], 
+                fg=self.colors['danger'], font=('Segoe UI', 10, 'bold')).pack(anchor=tk.W)
+        
+        self.inactive_processes_text = scrolledtext.ScrolledText(inactive_frame, width=40, height=8,
+                                                                state=tk.DISABLED,
+                                                                bg='#1e1e1e', fg='#ff9999',
+                                                                font=('Consolas', 9),
+                                                                relief='flat', bd=0,
+                                                                insertbackground='#ff9999')
+        self.inactive_processes_text.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
+
         # Log Display with modern styling
         log_frame = ttk.Frame(main_frame, style='Card.TFrame', padding=15)
         log_frame.pack(fill=tk.BOTH, expand=True)
@@ -249,13 +334,74 @@ class AutoTerminatorManager:
                             relief='flat', bd=0, padx=10, pady=4, cursor='hand2')
         clear_btn.pack(side=tk.RIGHT)
 
-        self.log_text = scrolledtext.ScrolledText(log_frame, width=80, height=15, 
+        self.log_text = scrolledtext.ScrolledText(log_frame, width=80, height=10, 
                                                 state=tk.DISABLED,
                                                 bg='#1e1e1e', fg='#00ff00',
                                                 font=('Consolas', 9),
                                                 relief='flat', bd=0,
                                                 insertbackground='#00ff00')
         self.log_text.pack(fill=tk.BOTH, expand=True)
+        
+        # Start the process update thread
+        self.start_process_update_thread()
+
+    def start_process_update_thread(self):
+        """Start a thread to periodically update process information"""
+        self.process_update_thread = threading.Thread(target=self._update_process_display, daemon=True)
+        self.process_update_thread.start()
+
+    def _update_process_display(self):
+        """Update the active/inactive process displays"""
+        while True:
+            try:
+                # Update active processes display
+                self.active_processes_text.config(state=tk.NORMAL)
+                self.active_processes_text.delete(1.0, tk.END)
+                
+                active_text = ""
+                for pid, info in self.active_processes.items():
+                    active_text += f"PID: {pid} - {info.get('name', 'Unknown')}\n"
+                    active_text += f"  CPU: {info.get('cpu', '--')}%, Mem: {info.get('memory', '--')} MB\n"
+                    active_text += f"  Last Active: {info.get('last_active', '--')}\n\n"
+                
+                self.active_processes_text.insert(tk.END, active_text if active_text else "No active processes\n")
+                self.active_processes_text.config(state=tk.DISABLED)
+                
+                # Update inactive processes display
+                self.inactive_processes_text.config(state=tk.NORMAL)
+                self.inactive_processes_text.delete(1.0, tk.END)
+                
+                inactive_text = ""
+                for pid, info in self.inactive_processes.items():
+                    inactive_text += f"PID: {pid} - {info.get('name', 'Unknown')}\n"
+                    inactive_text += f"  CPU: {info.get('cpu', '--')}%, Mem: {info.get('memory', '--')} MB\n"
+                    inactive_text += f"  Inactive for: {info.get('inactive_time', '--')}s\n\n"
+                
+                self.inactive_processes_text.insert(tk.END, inactive_text if inactive_text else "No inactive processes\n")
+                self.inactive_processes_text.config(state=tk.DISABLED)
+                
+            except Exception as e:
+                print(f"Error updating process display: {e}")
+            
+            time.sleep(2)  # Update every 2 seconds
+
+    def update_process_status(self, pid, is_active, process_info):
+        """Update the status of a process"""
+        if is_active:
+            self.active_processes[pid] = process_info
+            if pid in self.inactive_processes:
+                del self.inactive_processes[pid]
+        else:
+            self.inactive_processes[pid] = process_info
+            if pid in self.active_processes:
+                del self.active_processes[pid]
+        
+        # Add new child processes to the process library for separate reporting
+        if pid not in self.process_library and pid != (self.ps_process.pid if self.ps_process else None):
+            self.add_child_process_to_library(pid, process_info)
+        elif pid in self.process_library and pid != (self.ps_process.pid if self.ps_process else None):
+            # Update existing child process in library
+            self.update_child_process_in_library(pid, process_info, is_active)
 
     def start_terminal(self):
         if self.ps_process and self.ps_process.poll() is None:
@@ -273,6 +419,15 @@ class AutoTerminatorManager:
                 raise ValueError("Timeout must be a positive integer.")
         except ValueError as e:
             messagebox.showerror("Invalid Timeout", str(e))
+            return
+
+        # Get inactive timeout value
+        try:
+            inactive_timeout_value = int(self.inactive_timeout_entry.get())
+            if inactive_timeout_value <= 0:
+                raise ValueError("Inactive timeout must be a positive integer.")
+        except ValueError as e:
+            messagebox.showerror("Invalid Inactive Timeout", str(e))
             return
 
         # Use subprocess.Popen to launch the PowerShell script in a new window
@@ -297,8 +452,12 @@ class AutoTerminatorManager:
                 creationflags=subprocess.CREATE_NEW_CONSOLE  # Opens in a new console window
             )
             
-            # Start process monitoring
-            self.start_process_monitor(termination_delay_value)
+            # Process monitoring is handled by auto-terminator.ps1 and inactive_process_monitor.py
+            # self.start_process_monitor(timeout_value)  # Disabled - process_monitor.ps1 doesn't exist
+            
+            # Start inactive process monitoring if enabled
+            if self.inactive_monitor_enabled.get():
+                self.start_inactive_process_monitor(inactive_timeout_value)
             
             # Get the psutil process object
             try:
@@ -323,6 +482,7 @@ class AutoTerminatorManager:
                     'power': '--'
                 }
             }
+            print(f"Added PID {self.ps_process.pid} to process library. Total processes: {len(self.process_library)}")
 
             self.start_button.config(state=tk.DISABLED)
             self.stop_button.config(state=tk.NORMAL)
@@ -360,6 +520,22 @@ class AutoTerminatorManager:
         except Exception as e:
             print(f"Error launching process monitor: {e}")
 
+    def start_inactive_process_monitor(self, timeout_seconds):
+        """Start the inactive process monitor"""
+        try:
+            self.inactive_process_monitor = inactive_process_monitor.InactiveProcessMonitor(timeout_seconds)
+            # Set the callback for process status updates
+            self.inactive_process_monitor.set_process_status_callback(self.update_process_status)
+            # Set the callback for process termination
+            self.inactive_process_monitor.set_process_termination_callback(self.mark_child_process_terminated)
+            # Set the terminal PID to exclude from termination
+            if self.ps_process:
+                self.inactive_process_monitor.set_terminal_pid(self.ps_process.pid)
+            self.inactive_process_monitor.start_monitoring()
+            print(f"Inactive process monitor started with timeout: {timeout_seconds}s")
+        except Exception as e:
+            print(f"Error starting inactive process monitor: {e}")
+
     def stop_terminal(self):
         if self.ps_process and self.ps_process.poll() is None:
             print(f"Terminating auto-terminator process (PID: {self.ps_process.pid})...")
@@ -372,8 +548,11 @@ class AutoTerminatorManager:
             except subprocess.CalledProcessError as e:
                 print(f"Error terminating process: {e}")
             
-            # Stop process monitor
-            self.stop_process_monitor()
+            # Process monitor stopping is handled by auto-terminator.ps1 and inactive_process_monitor.py
+            # self.stop_process_monitor()  # Disabled - process_monitor.ps1 doesn't exist
+            
+            # Stop inactive process monitor
+            self.stop_inactive_process_monitor()
             
             # Update process library with final dashboard data
             if self.ps_process.pid in self.process_library:
@@ -386,6 +565,7 @@ class AutoTerminatorManager:
                     'network': self.network_label.cget("text"),
                     'power': self.battery_label.cget("text")
                 }
+                print(f"Updated PID {self.ps_process.pid} in process library as Terminated")
 
             self.ps_process = None
             self.psutil_process = None
@@ -395,6 +575,80 @@ class AutoTerminatorManager:
         self.status_label.config(text="● Stopped", fg=self.colors['danger'])
         self.clear_log_display()
         self.reset_resource_dashboard()
+        
+        # Clear process displays
+        self.active_processes = {}
+        self.inactive_processes = {}
+
+    def add_child_process_to_library(self, pid, process_info):
+        """Add a child process to the process library for separate reporting"""
+        try:
+            if pid not in self.process_library:
+                self.process_library[pid] = {
+                    'start_time': datetime.now(),
+                    'end_time': None,
+                    'status': 'Running (Child Process)',
+                    'auto_execute': False,  # Child processes don't have auto-execute
+                    'timeout': self.inactive_timeout_var.get() if hasattr(self, 'inactive_timeout_var') else 30,
+                    'logs': [],  # Will store log entries for this child process
+                    'dashboard_data': {
+                        'cpu': f"{process_info.get('cpu', 0)}%",
+                        'memory': f"{process_info.get('memory', 0)} MB",
+                        'network': '--',
+                        'power': '--'
+                    },
+                    'process_name': process_info.get('name', 'Unknown'),
+                    'parent_pid': self.ps_process.pid if self.ps_process else None
+                }
+                print(f"Added child process PID {pid} ({process_info.get('name', 'Unknown')}) to process library. Total processes: {len(self.process_library)}")
+        except Exception as e:
+            print(f"Error adding child process {pid} to library: {e}")
+
+    def update_child_process_in_library(self, pid, process_info, is_active):
+        """Update child process information in the library"""
+        try:
+            if pid in self.process_library:
+                # Update dashboard data
+                self.process_library[pid]['dashboard_data'] = {
+                    'cpu': f"{process_info.get('cpu', 0)}%",
+                    'memory': f"{process_info.get('memory', 0)} MB",
+                    'network': '--',
+                    'power': '--'
+                }
+                
+                # Update status based on activity
+                if is_active:
+                    self.process_library[pid]['status'] = 'Running (Child Process)'
+                else:
+                    inactive_time = process_info.get('inactive_time', 0)
+                    self.process_library[pid]['status'] = f'Inactive (Child Process) - {inactive_time}s'
+                
+                # Add log entry for significant status changes
+                if not is_active and process_info.get('inactive_time', 0) > 10:
+                    log_entry = f"[{datetime.now().strftime('%H:%M:%S')}] Child process {pid} ({process_info.get('name', 'Unknown')}) inactive for {process_info.get('inactive_time', 0)}s\n"
+                    self.process_library[pid]['logs'].append(log_entry)
+        except Exception as e:
+            print(f"Error updating child process {pid} in library: {e}")
+
+    def mark_child_process_terminated(self, pid):
+        """Mark a child process as terminated in the library"""
+        try:
+            if pid in self.process_library:
+                self.process_library[pid]['end_time'] = datetime.now()
+                
+                # Check if it was terminated due to inactivity or naturally
+                current_status = self.process_library[pid].get('status', '')
+                if 'Inactive' in current_status:
+                    self.process_library[pid]['status'] = 'Terminated (Child Process - Inactivity)'
+                    log_entry = f"[{datetime.now().strftime('%H:%M:%S')}] Child process {pid} terminated due to inactivity\n"
+                else:
+                    self.process_library[pid]['status'] = 'Terminated (Child Process - Natural)'
+                    log_entry = f"[{datetime.now().strftime('%H:%M:%S')}] Child process {pid} terminated naturally\n"
+                
+                self.process_library[pid]['logs'].append(log_entry)
+                print(f"Marked child process PID {pid} as terminated in process library")
+        except Exception as e:
+            print(f"Error marking child process {pid} as terminated: {e}")
 
     def stop_process_monitor(self):
         """Stop the process monitor"""
@@ -408,6 +662,13 @@ class AutoTerminatorManager:
                 print(f"Error terminating process monitor: {e}")
             
             self.process_monitor_process = None
+
+    def stop_inactive_process_monitor(self):
+        """Stop the inactive process monitor"""
+        if self.inactive_process_monitor:
+            self.inactive_process_monitor.stop_monitoring()
+            self.inactive_process_monitor = None
+            print("Inactive process monitor stopped.")
 
     def start_log_updater(self):
         self.stop_update_log.clear()
@@ -567,6 +828,9 @@ class AutoTerminatorManager:
     def view_library(self):
         """Open a new window to view the library of PID reports"""
         try:
+            print(f"Opening library with {len(self.process_library)} processes")
+            for pid, info in self.process_library.items():
+                print(f"  PID {pid}: {info['status']} - Started: {info['start_time']}")
             # Create library viewer window
             library_window = tk.Toplevel(self.master)
             library_window.title("📚 Process Library")

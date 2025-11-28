@@ -1,115 +1,92 @@
-# Auto-Terminator Manager (Windows)
+# ShellPilot AI
 
-A small Windows utility that launches a monitored PowerShell terminal session which auto-terminates after a period of inactivity. It includes:
+Windows terminal session manager with AI-enhanced command conversion, idle timeout termination, and comprehensive process monitoring with separate PID reporting.
 
-- A Python Tkinter GUI ([main.py](file:///c%3A/Users/Admin/Desktop/sp_cp/sp_cp/main.py)) to start/stop the monitored terminal and view logs with a resource dashboard (CPU, memory, open network connections, battery).
-- A PowerShell script ([auto-terminator.ps1](file:///c%3A/Users/Admin/Desktop/sp_cp/sp_cp/auto-terminator.ps1)) that runs an interactive prompt and terminates itself after a configurable idle timeout, with a visible countdown and basic built-in commands.
+## Core Components
 
-## Requirements
+**main.py**: Tkinter GUI with resource dashboard, process library, and separate PID report generation  
+**auto-terminator.ps1**: Interactive PowerShell session with idle timeout, AI commands, child process detection  
+**inactive_process_monitor.py**: Multi-process monitor with activity detection and termination callbacks  
+**ai_convert.py**: HuggingFace LLaMA-based natural language to PowerShell command converter
 
-- Windows 10/11
-- PowerShell 5.1+ (preinstalled on Windows)
-- Python 3.8+ for the GUI
-- Python package: `psutil`
-
-Install Python dependency:
+## Requirements & Setup
 
 ```bash
-pip install psutil
+pip install psutil python-dotenv huggingface-hub
 ```
 
-Note: Tkinter comes with the standard Windows Python installer. If you use a minimal distribution that lacks Tkinter, install the full Python installer from python.org.
+**Environment**: Windows 10/11, PowerShell 5.1+, Python 3.8+  
+**AI Setup**: Set `HF_TOKEN` environment variable for HuggingFace API access
 
-## Project Structure
+## Technical Implementation
 
-- [main.py](file:///c%3A/Users/Admin/Desktop/sp_cp/sp_cp/main.py): Tkinter GUI to launch/stop the PowerShell session, tail logs, and show process resource stats.
-- [auto-terminator.ps1](file:///c%3A/Users/Admin/Desktop/sp_cp/sp_cp/auto-terminator.ps1): Interactive PowerShell session with idle-timeout auto-termination and helper commands.
+### Process Architecture
+- **Main Process**: PowerShell terminal (PID tracked in process library)
+- **Child Processes**: Auto-detected via WMI, added to monitoring and library
+- **Separate Reporting**: Each PID gets individual report with logs, metrics, lifecycle data
 
-Log and temp files (per session):
-- Log file: `%TEMP%\auto_terminator.log`
-- Timestamp file: `%TEMP%\auto_terminator_<PID>.txt` (cleaned up on exit)
+### Monitoring System
+**Activity Detection**: CPU usage changes (>1%), memory deltas (>512KB), network connections  
+**Grace Period**: 10s for new processes before inactivity checks  
+**Protected Processes**: `conhost.exe` excluded from termination  
+**Callbacks**: Status updates and termination notifications to main GUI
 
-## Usage
+### File System Integration
+```
+%TEMP%\auto_terminator.log                    # Main session logs
+%TEMP%\auto_terminator_<PID>.txt             # Timestamp tracking
+%TEMP%\auto_terminator_monitored_children.txt # Child PID communication
+```
 
-### Option A: Use the GUI (recommended)
+### AI Command Processing
+**Model**: meta-llama/Llama-3.1-8B-Instruct  
+**Conversion**: Natural language → PowerShell commands  
+**Execution Modes**: Manual confirmation or auto-execute  
+**Command Examples**: "create file test.txt" → "type nul > test.txt"
 
-1. Ensure dependencies are installed: `pip install psutil`.
-2. Run the GUI:
-   ```bash
-   python main.py
-   ```
-3. In the window:
-   - Set Idle Timeout (seconds) as desired.
-   - Check "Auto-execute AI commands" if you want AI-generated commands to execute automatically without pressing Enter.
-   - Click "Start Terminal" to open the monitored PowerShell session in a new console window.
-   - The log output from the session will stream into the GUI.
-   - Click "Stop Terminal" to terminate the session.
+## Usage Patterns
 
-Resource Dashboard shows for the PowerShell process and its children:
-- CPU usage (%)
-- Memory usage (MB)
-- Count of open network connections
-- System battery status
+### GUI Mode
+```bash
+python main.py
+```
+**Features**: Resource dashboard, process library viewer, separate PID reports, log streaming
 
-### Option B: Run the PowerShell script directly
-
-From PowerShell, in the project directory:
-
+### Direct PowerShell
 ```powershell
-# Start with default 5s timeout
-./auto-terminator.ps1
-
-# Start with custom timeout (e.g., 10 seconds)
-./auto-terminator.ps1 -Timeout 10
-
-# Start with auto-execution of AI commands
-./auto-terminator.ps1 -AutoExecute
-
-# Show help
-./auto-terminator.ps1 -Help
-
-# Install to %USERPROFILE%\.local\bin and create a batch wrapper on PATH (user scope)
-./auto-terminator.ps1 -Install
-# Afterwards, you can run it as:
-auto-terminator -Timeout 10
+./auto-terminator.ps1 -Timeout 30 -AutoExecute
 ```
 
-Built-in commands inside the auto-terminator session:
-- `status`: Show idle time, remaining time, and environment details
-- `help`: Show available commands
-- `cls`: Clear screen and show banner
-- `exit`/`quit`: Exit the session
-- `ai <text>`: Convert natural language to command using AI
+### Built-in Commands
+- `status`: System state and monitored processes
+- `ai <text>`: Natural language command conversion
+- `help`, `cls`, `exit`: Standard utilities
 
-During the last 3 seconds of inactivity, a countdown warning appears. Any key press or command resets the timer.
+## Process Library Features
 
-When using the AI command converter:
-- With auto-execution disabled (default): You'll be prompted to press Enter to execute, 'e' to edit, or any other key to cancel
-- With auto-execution enabled: AI-generated commands will execute automatically without user intervention
+**Individual PID Tracking**:
+- Start/end timestamps
+- Status (Running/Inactive/Terminated)
+- Resource metrics (CPU/Memory/Network)
+- Complete log history
+- Parent-child relationships
 
-## Execution Policy Note (PowerShell)
+**Report Operations**:
+- View individual PID reports
+- Download single/all reports
+- Delete specific PID entries
+- Real-time status updates
 
-If script execution is restricted, you may see a policy error. To allow local scripts for the current user, run in PowerShell:
+## Advanced Configuration
 
-```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-```
+**Timeout Settings**: Main session timeout, child process inactivity timeout  
+**Monitoring Scope**: Automatic child detection, manual PID addition  
+**AI Integration**: Token-based authentication, command validation  
+**Resource Tracking**: CPU/Memory/Network/Battery metrics per PID
 
-Alternatively, when invoking directly you can use a bypass for that session:
+## Error Handling
 
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\auto-terminator.ps1 -Timeout 10
-```
-
-The GUI launches PowerShell with its own console window and passes the selected timeout.
-
-## Troubleshooting
-
-- If the GUI shows no logs, ensure the PowerShell window is open and `%TEMP%\auto_terminator.log` is writable.
-- If resource stats remain `--`, the underlying process may have exited or access was denied; try starting a new session.
-- If you get an execution policy error, apply the command in the section above and restart PowerShell.
-- If `tkinter` is missing, install a standard Python build from `https://www.python.org/downloads/`.
-
-## License
-
-This project is provided as-is for educational purposes. Add a license of your choice if distributing.
+**Process Termination**: Graceful → Force kill (5s timeout)  
+**File Operations**: Automatic cleanup on session end  
+**AI Failures**: Fallback to manual command entry  
+**Permission Issues**: Execution policy bypass options
